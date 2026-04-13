@@ -26,7 +26,7 @@ class StagedRewardWrapper(gym.Wrapper):
 
     Per-step reward (before scaling):
       - reach:   0.25 * exp(-10 * dist_xy) * exp(-10 * dist_z_above)
-      - grasp:   0.25 * (gripper_closed & near_cube)
+      - grasp:   0.25 (very close to cube OR cube lifted)
       - lift:    0.50 * clamp(lift_height / target_height)
 
     Per-step reward is then multiplied by (1 / max_episode_steps) so that
@@ -59,8 +59,8 @@ class StagedRewardWrapper(gym.Wrapper):
 
         # Read state from MuJoCo sensors
         data = self.unwrapped._data
-        block_pos = data.sensor("block_pos").data
-        tcp_pos = data.sensor("2f85/pinch_pos").data
+        block_pos = data.sensor("block_pos").data.copy()
+        tcp_pos = data.sensor("2f85/pinch_pos").data.copy()
 
         # ---- Stage 1: Approach (0 ~ 0.25) ----
         # Reward for XY proximity (horizontal approach)
@@ -73,12 +73,15 @@ class StagedRewardWrapper(gym.Wrapper):
 
         # ---- Stage 2: Grasp (0 ~ 0.25) ----
         dist_3d = np.linalg.norm(block_pos - tcp_pos)
-        is_near = dist_3d < 0.05  # within 5cm
+        is_near = dist_3d < 0.05           # within 5cm
+        is_very_close = dist_3d < 0.02     # within 2cm = cube is between gripper fingers
 
-        # Check if gripper is applying force (cube is grasped)
-        # Use lift as proxy for successful grasp
+        # Lift detection
         lift = block_pos[2] - self._z_init if self._z_init else 0
-        is_grasped = is_near and lift > 0.005  # slight lift = cube in gripper
+        is_lifted = lift > 0.005           # cube lifted > 5mm from table
+
+        # Grasp = cube very close to TCP (in gripper) OR cube already lifted while near
+        is_grasped = is_very_close or (is_near and is_lifted)
 
         if is_grasped:
             r_grasp = 0.25
