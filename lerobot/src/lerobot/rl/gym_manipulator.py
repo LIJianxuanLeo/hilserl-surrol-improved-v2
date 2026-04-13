@@ -332,7 +332,7 @@ def make_robot_env(cfg: HILSerlRobotEnvConfig) -> tuple[gym.Env, Any]:
                 EEOrientationActionWrapper,
             )
 
-            base_env = PandaPickCubeGymEnv(image_obs=True, reward_type="sparse")
+            base_env = PandaPickCubeGymEnv(image_obs=True, reward_type="dense")
             if use_gripper:
                 base_env = GripperPenaltyWrapper(base_env, penalty=gripper_penalty)
             base_env = EEOrientationActionWrapper(
