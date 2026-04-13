@@ -4,7 +4,7 @@
     "resume": false,
     "seed": 1000,
     "num_workers": 4,
-    "batch_size": 256,
+    "batch_size": 128,
     "steps": 100000,
     "eval_freq": 10000,
     "log_freq": 1,
