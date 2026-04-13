@@ -41,9 +41,38 @@ Actor 学习率不应高于 Critic。如果 Actor 更新太快，会追逐不准
 
 **修复**: 使用占位符 `__HAPTIC_MODULE_PATH__`，由 `setup.sh` 自动替换
 
+## 收敛加速改进
+
+### 8. 稀疏奖励 → 阶段式密集奖励
+原始项目使用稀疏奖励（仅成功时 reward=1.0），策略在初期完全没有梯度信号引导。在 32k 步时仍无法学会接近方块。
+
+**修复**: 
+1. 将 `reward_type` 从 `"sparse"` 改为 `"dense"`
+2. 新增 `StagedRewardWrapper`（`staged_reward_wrapper.py`），提供三阶段密集奖励：
+
+| 阶段 | 奖励范围 | 条件 |
+|------|---------|------|
+| 接近（Approach） | 0 ~ 0.25 | `0.25 * exp(-10*dist_xy) * exp(-10*dist_z)` |
+| 抓取（Grasp） | 0 ~ 0.25 | 方块在手内 = 0.25，靠近 = 0.10 |
+| 抬起（Lift） | 0 ~ 0.50 | `0.50 * min(lift/target, 1.0)` |
+| 成功 | 1.0 | 完成任务 |
+
+奖励设计特点：
+- 随机策略约得 0.0 分
+- 靠近方块约得 0.15-0.25 分
+- 抓住方块约得 0.35-0.50 分
+- 成功抬起约得 0.50-1.00 分
+- 连续梯度信号引导策略逐步学会 接近→抓取→抬起
+
+### 9. batch_size = 256 → 128
+RTX 3060 (12GB) 使用 batch_size=256 时 GPU 内存溢出导致系统死机。
+
+**修复**: `batch_size = 128`
+
 ## 其他改进
 
-- 启用 WandB 监控 (`wandb.enable = true`)
+- WandB 监控默认关闭（`wandb.enable = false`），避免未登录时出现交互提示
+  - 启用方法：先 `wandb login`，再将配置中 `wandb.enable` 改为 `true`
 - 提高评估和保存频率 (`eval_freq/save_freq: 20000 → 10000`)
 - 增加 `online_step_before_learning: 100 → 200`
 - 放宽策略标准差上限 (`std_max: 5.0 → 10.0`)

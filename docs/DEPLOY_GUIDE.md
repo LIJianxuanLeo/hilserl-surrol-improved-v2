@@ -393,10 +393,18 @@ python -m lerobot.rl.actor \
 
 ### 8.1 WandB 监控
 
-训练默认启用 WandB。首次使用需要登录：
+训练默认 **关闭** WandB（避免未登录时交互提示卡住训练）。启用步骤：
+
 ```bash
+# 1. 安装并登录
 pip install wandb
-wandb login  # 输入你的 API key
+wandb login  # 输入你的 API key（从 https://wandb.ai/authorize 获取）
+
+# 2. 创建 ~/.netrc（如果登录后仍报错）
+touch ~/.netrc
+
+# 3. 修改配置文件 train_config_gym_hil_touch.json
+#    将 "wandb": { "enable": false } 改为 "enable": true
 ```
 
 **关键监控指标**：
@@ -412,16 +420,18 @@ wandb login  # 输入你的 API key
 
 ### 8.2 收敛判断
 
-**正常收敛信号**：
-- critic loss 在前 5k 步内开始下降
-- temperature 从 1.0 逐步下降
-- episodic reward 在 10k-30k 步开始出现 1.0（成功拾取）
-- 无人工干预时的成功率逐步提升
+**正常收敛信号**（使用阶段式奖励）：
+- 前 1k 步：episodic reward > 0.05（策略开始学会移动方向）
+- 前 5k 步：critic loss 开始下降，reward 达到 0.15+（靠近方块）
+- 5k-15k 步：reward 出现 0.35+（开始抓取）
+- 15k-30k 步：reward 出现 0.50+（成功抬起）
+- temperature 从 1.0 逐步下降到 0.01-0.1
+- 终端可见 `reward: 1.0` 的 episode
 
 **不收敛信号**：
 - critic loss 持续上升或 NaN
 - temperature 卡在 1.0 不变
-- 50k 步后仍然没有成功的 episode
+- 30k 步后 reward 仍低于 0.10（未学会接近）
 - actor loss 出现极大值
 
 ### 8.3 调参建议
@@ -463,14 +473,20 @@ ls /opt/OpenHaptics/Developer/3.4-0/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-### Q2: CUDA out of memory
+### Q2: CUDA out of memory / 电脑死机
+
+batch_size 已从 256 降至 128 以适配 RTX 3060 (12GB)。如果仍然 OOM：
 
 ```bash
-# 减小 batch_size（在 train_config_gym_hil_touch.json 中）
-# 256 → 128 或 64
+# 进一步减小 batch_size（在 train_config_gym_hil_touch.json 中）
+# 128 → 64
 
 # 检查 GPU 内存占用
 nvidia-smi
+
+# 如果电脑已经死机，长按电源键重启
+# 重启后检查进程是否残留
+kill $(lsof -t -i:50051) 2>/dev/null
 ```
 
 ### Q3: gRPC 连接失败
@@ -551,7 +567,9 @@ ln -sf $(pwd)/lerobot/franka_sim_touch_demos \
 | `std_max` | 5.0 | **10.0** | 允许更大的策略标准差，增强初期探索 |
 | `eval_freq` | 20000 | **10000** | 更频繁评估，更早发现问题 |
 | `save_freq` | 20000 | **10000** | 更频繁保存，减少数据丢失风险 |
-| `wandb.enable` | false | **true** | 启用训练监控 |
+| `batch_size` | 256 | **128** | RTX 3060 (12GB) 使用 256 会 OOM 死机 |
+| `wandb.enable` | false | **false** | 默认关闭，需要时手动开启（先 `wandb login`） |
+| `reward_type` | sparse | **dense + staged** | 阶段式密集奖励加速收敛 |
 | `action.min/max` | [-0.4,..,0] / [0.4,..,2] | **[-1.0,..,0] / [1.0,..,2]** | 匹配实际数据中的动作范围 |
 | `online_step_before_learning` | 100 | **200** | 积累更多初始样本后再开始学习 |
 | `haptic_module_path` | 硬编码绝对路径 | **自动配置** | setup.sh 自动设置为项目内路径 |
@@ -574,3 +592,32 @@ ln -sf $(pwd)/lerobot/franka_sim_touch_demos \
 - 维度 3-5（delta_rpy）：姿态增量，范围 [-0.25, 0.25]
 - 维度 6（gripper）：离散夹爪，范围 [0, 2]，经 wrapper 映射为 [-1, 1]
 - `num_discrete_actions = 3`：夹爪有 3 种状态（开/中/合）
+
+**阶段式密集奖励（StagedRewardWrapper）**：
+
+替代原始稀疏奖励，提供连续梯度信号引导策略学习：
+
+```
+总奖励 = r_reach + r_grasp + r_lift  （范围 [0, 1]）
+
+Stage 1 - 接近 (0~0.25):
+  r_reach = 0.25 * exp(-10 * dist_xy) * exp(-10 * dist_z)
+  → XY 平面接近方块 + 高度对齐
+
+Stage 2 - 抓取 (0~0.25):
+  is_grasped (方块被抬起 > 5mm) → 0.25
+  is_near (3D 距离 < 5cm)       → 0.10
+  else                           → 0.00
+
+Stage 3 - 抬起 (0~0.50):
+  r_lift = 0.50 * min(lift_height / target_height, 1.0)
+  → 抬起越高奖励越大
+
+成功完成任务 → reward = 1.0
+```
+
+设计目的：
+- 随机策略得分 ~0.0（有改进方向）
+- 靠近方块得分 ~0.15-0.25（引导学会移动）
+- 抓住方块得分 ~0.35-0.50（引导学会合夹爪）
+- 成功抬起得分 ~0.50-1.00（引导学会完整序列）
