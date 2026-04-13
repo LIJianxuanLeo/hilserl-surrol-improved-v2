@@ -10,6 +10,10 @@ Each stage builds on the previous one, providing continuous gradient
 signal that dramatically speeds up SAC convergence compared to sparse
 or simple dense rewards.
 
+IMPORTANT: Per-step rewards are scaled by 1/max_episode_steps so that
+the episode cumulative reward stays in [0, ~1] range, compatible with
+SAC temperature=1.0 and grad_clip_norm=1.0.
+
 Designed for RTX 3060 (12GB) with batch_size=128.
 """
 
@@ -20,22 +24,29 @@ import numpy as np
 class StagedRewardWrapper(gym.Wrapper):
     """Multi-stage dense reward for pick tasks.
 
-    Reward breakdown (total range: [0, 1]):
+    Per-step reward (before scaling):
       - reach:   0.25 * exp(-10 * dist_xy) * exp(-10 * dist_z_above)
       - grasp:   0.25 * (gripper_closed & near_cube)
       - lift:    0.50 * clamp(lift_height / target_height)
 
-    The reward is designed so that:
-      1. Random policy gets ~0.0
-      2. Policy near cube gets ~0.15-0.25
-      3. Policy grasping cube gets ~0.35-0.50
-      4. Policy lifting cube gets ~0.50-1.00
+    Per-step reward is then multiplied by (1 / max_episode_steps) so that
+    the entire episode's cumulative reward stays in [0, ~1] range.
+
+    Success step overrides with reward = 1.0 (unscaled).
+
+    Expected episode rewards:
+      - Random policy:  ~0.02 - 0.08
+      - Near cube:      ~0.15 - 0.25
+      - Grasping cube:  ~0.35 - 0.50
+      - Full success:   ~1.0  - 1.3  (shaping + 1.0 success bonus)
     """
 
-    def __init__(self, env: gym.Env, lift_target: float = 0.1):
+    def __init__(self, env: gym.Env, lift_target: float = 0.1, max_episode_steps: int = 100):
         super().__init__(env)
         self._lift_target = lift_target
         self._z_init = None
+        # Scale per-step reward so episode sum ≈ [0, 1]
+        self._reward_scale = 1.0 / max_episode_steps
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
@@ -80,10 +91,11 @@ class StagedRewardWrapper(gym.Wrapper):
         lift_ratio = max(0, lift) / self._lift_target if self._lift_target > 0 else 0
         r_lift = 0.50 * min(lift_ratio, 1.0)
 
-        # ---- Total reward ----
-        reward = r_reach + r_grasp + r_lift
+        # ---- Total reward (scaled) ----
+        # Scale per-step reward so episode cumulative stays in [0, ~1]
+        reward = (r_reach + r_grasp + r_lift) * self._reward_scale
 
-        # Success bonus
+        # Success: override with unscaled 1.0 as the dominant learning signal
         if info.get("succeed", False):
             reward = 1.0
 
