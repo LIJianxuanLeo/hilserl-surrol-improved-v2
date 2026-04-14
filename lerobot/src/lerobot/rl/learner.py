@@ -227,15 +227,30 @@ def start_learner_threads(
     )
     communication_process.start()
 
-    add_actor_information_and_train(
-        cfg=cfg,
-        wandb_logger=wandb_logger,
-        csv_logger=csv_logger,
-        shutdown_event=shutdown_event,
-        transition_queue=transition_queue,
-        interaction_message_queue=interaction_message_queue,
-        parameters_queue=parameters_queue,
-    )
+    try:
+        add_actor_information_and_train(
+            cfg=cfg,
+            wandb_logger=wandb_logger,
+            csv_logger=csv_logger,
+            shutdown_event=shutdown_event,
+            transition_queue=transition_queue,
+            interaction_message_queue=interaction_message_queue,
+            parameters_queue=parameters_queue,
+        )
+    except torch.cuda.OutOfMemoryError as e:
+        logging.error(
+            f"[LEARNER] GPU out of memory: {e}. "
+            "Consider reducing batch_size or replay_buffer_capacity in config."
+        )
+        if csv_logger:
+            csv_logger.save_summary()
+        raise
+    except Exception as e:
+        logging.error(f"[LEARNER] Fatal error in training loop: {e}", exc_info=True)
+        if csv_logger:
+            csv_logger.save_summary()
+        raise
+
     logging.info("[LEARNER] Training process stopped")
 
     # Save training summary on exit
@@ -608,7 +623,7 @@ def add_actor_information_and_train(
             logging.info(f"[LEARNER] Number of optimization step: {optimization_step}")
 
         # Save checkpoint at specified intervals
-        if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step == online_steps):
+        if saving_checkpoint and (optimization_step % save_freq == 0 or optimization_step >= online_steps):
             save_training_checkpoint(
                 cfg=cfg,
                 optimization_step=optimization_step,
@@ -624,6 +639,12 @@ def add_actor_information_and_train(
             # Also save CSV summary at each checkpoint
             if csv_logger:
                 csv_logger.save_summary()
+            # Stop when target optimization steps are reached
+            if optimization_step >= online_steps:
+                logging.info(
+                    f"[LEARNER] Reached {online_steps} optimization steps. Training complete."
+                )
+                break
 
 
 def start_learner(

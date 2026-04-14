@@ -124,8 +124,8 @@ class TrainingCSVLogger:
             "timestamp": f"{time.time() - self.start_time:.1f}",
             "interaction_step": interaction_message.get("Interaction step", ""),
             "episodic_reward": self._fmt(interaction_message.get("Episodic reward")),
-            "episode_intervention": interaction_message.get("Episode intervention", ""),
-            "intervention_rate": self._fmt(interaction_message.get("Intervention rate")),
+            "episode_intervention": int(interaction_message.get("Episode intervention", 0)),
+            "intervention_rate": self._fmt(interaction_message.get("Intervention rate", 0.0)),
             "policy_freq_hz": self._fmt(interaction_message.get("Policy frequency [Hz]")),
             "policy_freq_90p_hz": self._fmt(interaction_message.get("Policy frequency 90th-p [Hz]")),
         }
