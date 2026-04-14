@@ -1,20 +1,24 @@
 """
-Staged Dense Reward Wrapper for Pick-and-Place Task
+Staged Dense Reward Wrapper v2 for Pick-and-Place Task
 
-Provides a multi-stage reward signal that guides the policy through:
-  Stage 1 (Approach):  Move TCP close to the cube
-  Stage 2 (Grasp):     Close gripper when near the cube
-  Stage 3 (Lift):      Lift the cube off the table
+设计原则：per-step reward [0, 10] 使 Q ≈ 15-40，远大于 SAC 熵项 ~6，
+确保 actor 梯度由任务奖励主导而非熵探索。
 
-Each stage builds on the previous one, providing continuous gradient
-signal that dramatically speeds up SAC convergence compared to sparse
-or simple dense rewards.
+三阶段密集奖励：
+  Stage 1 (Approach):  引导 TCP 靠近方块（逆距离核，远处仍有梯度）
+  Stage 2 (Grasp):     平滑距离渐变 + 抬升确认（无离散跳跃）
+  Stage 3 (Lift):      与抬起高度成正比
 
-IMPORTANT: Per-step rewards are scaled by 1/max_episode_steps so that
-the episode cumulative reward stays in [0, ~1] range, compatible with
-SAC temperature=1.0 and grad_clip_norm=1.0.
+成功奖励为加法 += 10.0（非覆盖），保持 Q 函数连续。
 
-Designed for RTX 3060 (12GB) with batch_size=128.
+v1→v2 关键变更：
+  1. 移除 1/max_episode_steps 缩放（v1 根因：Q ≈ 0.3 << 熵项 6）
+  2. exp(-10d) → 1/(1+5d) 逆距离核（远处仍有梯度）
+  3. 离散 0/0.10/0.25 → 平滑线性渐变（消除 Q 不连续）
+  4. succeed 时 reward = 1.0 → reward += 10.0（加法，Q 平滑递增）
+
+适用于 RTX 3060 (12GB)，配合 SAC temperature=1.0, discount=0.99。
+目标：1-2.5 小时收敛。
 """
 
 import gymnasium as gym
@@ -22,31 +26,27 @@ import numpy as np
 
 
 class StagedRewardWrapper(gym.Wrapper):
-    """Multi-stage dense reward for pick tasks.
+    """Multi-stage dense reward for pick tasks (v2).
 
-    Per-step reward (before scaling):
-      - reach:   0.25 * exp(-10 * dist_xy) * exp(-10 * dist_z_above)
-      - grasp:   0.25 (very close to cube OR cube lifted)
-      - lift:    0.50 * clamp(lift_height / target_height)
-
-    Per-step reward is then multiplied by (1 / max_episode_steps) so that
-    the entire episode's cumulative reward stays in [0, ~1] range.
-
-    Success step overrides with reward = 1.0 (unscaled).
+    Per-step reward (NO scaling):
+      - reach:   0-3.0   逆距离核 1/(1+5d)，远处仍有梯度
+      - grasp:   0-3.0   平滑渐变 8cm→1cm + 抬升确认
+      - lift:    0-4.0   与抬起高度线性正比
+      - success: +10.0   加法叠加
 
     Expected episode rewards:
-      - Random policy:  ~0.02 - 0.08
-      - Near cube:      ~0.15 - 0.25
-      - Grasping cube:  ~0.35 - 0.50
-      - Full success:   ~1.0  - 1.3  (shaping + 1.0 success bonus)
+      - Random policy:   ~15-30
+      - Near cube:       ~25-40
+      - Grasping cube:   ~35-50
+      - Full success:    ~40-60 (shaping + success bonus)
     """
 
-    def __init__(self, env: gym.Env, lift_target: float = 0.1, max_episode_steps: int = 100):
+    def __init__(self, env: gym.Env, lift_target: float = 0.1,
+                 max_episode_steps: int = 100):
         super().__init__(env)
         self._lift_target = lift_target
         self._z_init = None
-        # Scale per-step reward so episode sum ≈ [0, 1]
-        self._reward_scale = 1.0 / max_episode_steps
+        # v2: 不再缩放。这是 v1 收敛慢的根因。
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
@@ -62,44 +62,43 @@ class StagedRewardWrapper(gym.Wrapper):
         block_pos = data.sensor("block_pos").data.copy()
         tcp_pos = data.sensor("2f85/pinch_pos").data.copy()
 
-        # ---- Stage 1: Approach (0 ~ 0.25) ----
-        # Reward for XY proximity (horizontal approach)
+        # ── Stage 1: Approach (0 ~ 3.0) ────────────────────────
+        # Inverse-distance kernel: 1/(1+5d)
+        #   20cm → 0.50 (vs exp: 0.14) — 远处仍有学习梯度
+        #   40cm → 0.33 (vs exp: 0.02)
         dist_xy = np.linalg.norm(block_pos[:2] - tcp_pos[:2])
-        # Reward for being slightly above the cube (good pre-grasp height)
         dz = tcp_pos[2] - block_pos[2]
-        # Optimal height: 0 to 0.03m above the cube
-        dist_z = max(0, abs(dz) - 0.03)
-        r_reach = 0.25 * np.exp(-10 * dist_xy) * np.exp(-10 * dist_z)
+        # Allow 0-3cm above cube as good pre-grasp height
+        dist_z = max(0.0, abs(dz) - 0.03)
 
-        # ---- Stage 2: Grasp (0 ~ 0.25) ----
+        reach_xy = 1.0 / (1.0 + 5.0 * dist_xy)
+        reach_z = 1.0 / (1.0 + 5.0 * dist_z)
+        r_reach = 3.0 * reach_xy * reach_z
+
+        # ── Stage 2: Grasp (0 ~ 3.0) ───────────────────────────
+        # Smooth linear ramp: 0 at 8cm → 1.0 at 1cm (no discrete jumps)
         dist_3d = np.linalg.norm(block_pos - tcp_pos)
-        is_near = dist_3d < 0.05           # within 5cm
-        is_very_close = dist_3d < 0.02     # within 2cm = cube is between gripper fingers
+        grasp_proximity = np.clip((0.08 - dist_3d) / 0.07, 0.0, 1.0)
 
-        # Lift detection
-        lift = block_pos[2] - self._z_init if self._z_init else 0
-        is_lifted = lift > 0.005           # cube lifted > 5mm from table
+        # Lift confirmation: extra bonus when cube is actually lifted
+        lift = (block_pos[2] - self._z_init) if self._z_init is not None else 0.0
+        lift_grasp_bonus = 0.5 * float(lift > 0.005) * float(dist_3d < 0.05)
 
-        # Grasp = cube very close to TCP (in gripper) OR cube already lifted while near
-        is_grasped = is_very_close or (is_near and is_lifted)
+        # Normalize: max of (proximity + bonus) = 1.0 + 0.5 = 1.5
+        r_grasp = 3.0 * min(grasp_proximity + lift_grasp_bonus, 1.5) / 1.5
 
-        if is_grasped:
-            r_grasp = 0.25
-        elif is_near:
-            r_grasp = 0.10  # partial reward for being close
-        else:
-            r_grasp = 0.0
+        # ── Stage 3: Lift (0 ~ 4.0) ────────────────────────────
+        # Largest weight: hardest sub-skill, needs strongest signal
+        lift_ratio = np.clip(lift / self._lift_target, 0.0, 1.0) \
+            if self._lift_target > 0 else 0.0
+        r_lift = 4.0 * lift_ratio
 
-        # ---- Stage 3: Lift (0 ~ 0.50) ----
-        lift_ratio = max(0, lift) / self._lift_target if self._lift_target > 0 else 0
-        r_lift = 0.50 * min(lift_ratio, 1.0)
+        # ── Total (0 ~ 10.0 per step, NOT scaled) ──────────────
+        reward = r_reach + r_grasp + r_lift
 
-        # ---- Total reward (scaled) ----
-        # Scale per-step reward so episode cumulative stays in [0, ~1]
-        reward = (r_reach + r_grasp + r_lift) * self._reward_scale
-
-        # Success: override with unscaled 1.0 as the dominant learning signal
+        # ── Success bonus: additive +10 (not override) ─────────
+        # Additive preserves Q-function continuity at success boundary
         if info.get("succeed", False):
-            reward = 1.0
+            reward += 10.0
 
         return obs, reward, terminated, truncated, info
