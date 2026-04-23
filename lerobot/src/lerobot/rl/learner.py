@@ -164,6 +164,15 @@ def train(cfg: TrainRLServerPipelineConfig, job_name: str | None = None):
     csv_logger = TrainingCSVLogger(output_dir=cfg.output_dir, job_name=job_name)
     logging.info(colored("CSV training logs enabled.", "green", attrs=["bold"]))
 
+    # F4: Save experiment metadata snapshot for reproducibility
+    try:
+        csv_logger.save_metadata(
+            cfg_dict=cfg.to_dict(),
+            extra={"job_name": job_name},
+        )
+    except Exception as e:
+        logging.warning(f"[LEARNER] Failed to save experiment metadata: {e}")
+
     # Handle resume logic
     cfg = handle_resume_logic(cfg)
 
@@ -408,6 +417,12 @@ def add_actor_information_and_train(
 
         # Wait until the replay buffer has enough samples to start training
         if len(replay_buffer) < online_step_before_learning:
+            buf_size = len(replay_buffer)
+            if buf_size > 0 and buf_size % 10 == 0:
+                logging.info(
+                    f"[LEARNER] Warmup: {buf_size}/{online_step_before_learning} transitions collected. "
+                    f"Training starts at {online_step_before_learning}."
+                )
             continue
 
         if online_iterator is None:
@@ -585,6 +600,30 @@ def add_actor_information_and_train(
 
         # Update target networks (main and discrete)
         policy.update_target_networks()
+
+        # F3: Compute Q-value statistics for paper analysis (every log_freq steps to limit overhead)
+        # Verifies V2 design target: Q ∈ [15, 40] >> entropy term ≈ 6
+        if optimization_step % log_freq == 0:
+            try:
+                with torch.no_grad():
+                    q_values = policy.critic_forward(
+                        observations=observations,
+                        actions=actions,
+                        use_target=False,
+                        observation_features=observation_features,
+                    )
+                    q_min_per_action = q_values.min(dim=0)[0]  # min across critic ensemble
+                    training_infos["q_mean"] = q_min_per_action.mean().item()
+                    training_infos["q_std"] = q_min_per_action.std().item()
+                    training_infos["q_min"] = q_min_per_action.min().item()
+                    training_infos["q_max"] = q_min_per_action.max().item()
+                    # Entropy term: temperature * |log_prob| (component of actor loss)
+                    _, log_probs, _ = policy.actor(observations, observation_features)
+                    training_infos["entropy_term"] = (
+                        policy.temperature * log_probs.abs().mean()
+                    ).item()
+            except Exception as e:
+                logging.debug(f"[LEARNER] Q-stat computation skipped: {e}")
 
         # Log training metrics at specified intervals
         if optimization_step % log_freq == 0:

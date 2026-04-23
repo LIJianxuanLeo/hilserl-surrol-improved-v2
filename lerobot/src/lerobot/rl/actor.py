@@ -281,6 +281,16 @@ def act_with_policy(
     for interaction_step in range(cfg.policy.online_steps):
         start_time = time.perf_counter()
         if shutdown_event.is_set():
+            # 关机前刷新未发送的 transitions，避免数据丢失
+            if len(list_transition_to_send_to_learner) > 0:
+                logging.info(
+                    f"[ACTOR] Flushing {len(list_transition_to_send_to_learner)} unsent transitions before shutdown"
+                )
+                push_transitions_to_transport_queue(
+                    transitions=list_transition_to_send_to_learner,
+                    transitions_queue=transitions_queue,
+                )
+                list_transition_to_send_to_learner = []
             logging.info("[ACTOR] Shutting down act_with_policy")
             return
 
@@ -351,6 +361,14 @@ def act_with_policy(
 
         # Update transition for next iteration
         transition = new_transition
+
+        # 每积累 50 条 transition 就立即发送，让 learner 尽早开始训练（无需等 episode 结束）
+        if len(list_transition_to_send_to_learner) >= 50:
+            push_transitions_to_transport_queue(
+                transitions=list_transition_to_send_to_learner,
+                transitions_queue=transitions_queue,
+            )
+            list_transition_to_send_to_learner = []
 
         if done or truncated:
             intervention_rate_live = (
