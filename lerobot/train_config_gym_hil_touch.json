@@ -1,5 +1,5 @@
 {
-    "output_dir": null,
+    "output_dir": "outputs/train/paper_run_v2",
     "job_name": "franka_sim_sac_touch",
     "resume": false,
     "seed": 1000,
