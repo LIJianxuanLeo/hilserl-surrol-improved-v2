@@ -396,6 +396,18 @@ def act_with_policy(
             if episode_total_steps > 0:
                 intervention_rate = episode_intervention_steps / episode_total_steps
 
+            # F6: episode-level metadata for paper analysis
+            # Termination reason: success (env-level done), timeout (truncation), or other
+            info_succeed = bool(intervention_info.get("succeed", False)) if isinstance(intervention_info, dict) else False
+            if done and info_succeed:
+                termination_reason = "success"
+            elif truncated:
+                termination_reason = "timeout"
+            elif done:
+                termination_reason = "done_other"
+            else:
+                termination_reason = "unknown"
+
             # Send episodic reward to the learner
             interactions_queue.put(
                 python_object_to_bytes(
@@ -404,6 +416,9 @@ def act_with_policy(
                         "Interaction step": interaction_step,
                         "Episode intervention": int(episode_intervention),
                         "Intervention rate": intervention_rate,
+                        "Episode length": episode_total_steps,
+                        "Episode intervention steps": episode_intervention_steps,
+                        "Termination reason": termination_reason,
                         **stats,
                     }
                 )

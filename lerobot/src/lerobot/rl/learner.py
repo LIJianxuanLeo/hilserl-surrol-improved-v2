@@ -601,11 +601,14 @@ def add_actor_information_and_train(
         # Update target networks (main and discrete)
         policy.update_target_networks()
 
-        # F3: Compute Q-value statistics for paper analysis (every log_freq steps to limit overhead)
-        # Verifies V2 design target: Q ∈ [15, 40] >> entropy term ≈ 6
+        # F3 + F6: Comprehensive paper-grade diagnostics (every log_freq steps to limit overhead).
+        # Critic: q_*, q_target_*, td_error_*, critic_disagreement.
+        # Actor: policy_entropy_raw, log_prob_mean, actor_loss decomposition.
+        # System: gpu_mem_*.
         if optimization_step % log_freq == 0:
             try:
                 with torch.no_grad():
+                    # ── Critic: current Q values (using ensemble min, REDQ style) ──
                     q_values = policy.critic_forward(
                         observations=observations,
                         actions=actions,
@@ -617,13 +620,78 @@ def add_actor_information_and_train(
                     training_infos["q_std"] = q_min_per_action.std().item()
                     training_infos["q_min"] = q_min_per_action.min().item()
                     training_infos["q_max"] = q_min_per_action.max().item()
-                    # Entropy term: temperature * |log_prob| (component of actor loss)
-                    _, log_probs, _ = policy.actor(observations, observation_features)
+                    # F6: REDQ ensemble disagreement (std across critics, averaged over batch).
+                    # Healthy REDQ ensembles maintain non-trivial disagreement; collapse → overestimation.
+                    training_infos["critic_disagreement"] = q_values.std(dim=0).mean().item()
+
+                    # ── Actor: re-sample policy + compute entropy ──
+                    pi_actions, log_probs, _ = policy.actor(observations, observation_features)
+                    # entropy_term = α·|log π| (legacy field, kept for backward compat)
                     training_infos["entropy_term"] = (
                         policy.temperature * log_probs.abs().mean()
                     ).item()
+                    # F6: raw entropy = -E[log π], standard SAC diagnostic
+                    training_infos["policy_entropy_raw"] = (-log_probs.mean()).item()
+                    training_infos["policy_log_prob_mean"] = log_probs.mean().item()
+                    # F6: actor loss decomposition into Q and entropy components.
+                    # Actor loss = (α·log π(ã|s) - Q(s, ã)).mean(), where ã ~ π(s).
+                    # We evaluate Q at policy-sampled actions for fidelity to the actual loss.
+                    pi_q_values = policy.critic_forward(
+                        observations=observations,
+                        actions=pi_actions,
+                        use_target=False,
+                        observation_features=observation_features,
+                    )
+                    pi_q_min = pi_q_values.min(dim=0)[0]
+                    training_infos["actor_loss_entropy_term"] = (
+                        policy.temperature * log_probs.mean()
+                    ).item()
+                    training_infos["actor_loss_q_term"] = (-pi_q_min.mean()).item()
+
+                    # ── F6: TD error = |Q(s,a) - (r + γ · min Q'(s', a'))| ──
+                    # Compute target Q via target critic on next state with policy-sampled next action
+                    next_actions, next_log_probs, _ = policy.actor(
+                        next_observations, next_observation_features
+                    )
+                    next_q_values = policy.critic_forward(
+                        observations=next_observations,
+                        actions=next_actions,
+                        use_target=True,
+                        observation_features=next_observation_features,
+                    )
+                    next_q_min = next_q_values.min(dim=0)[0]
+                    # Subtract entropy bonus from target (standard SAC backup)
+                    next_q_min = next_q_min - policy.temperature * next_log_probs
+                    discount = cfg.policy.discount
+                    # done shape: (batch, 1) → squeeze to (batch,) for broadcast
+                    done_squeezed = done.squeeze(-1) if done.ndim > 1 else done
+                    rewards_squeezed = rewards.squeeze(-1) if rewards.ndim > 1 else rewards
+                    td_target = rewards_squeezed + discount * (1.0 - done_squeezed.float()) * next_q_min
+                    td_error = (q_min_per_action - td_target).abs()
+
+                    training_infos["q_target_mean"] = td_target.mean().item()
+                    training_infos["q_target_std"] = td_target.std().item()
+                    training_infos["td_error_mean"] = td_error.mean().item()
+                    training_infos["td_error_std"] = td_error.std().item()
+                    training_infos["td_error_max"] = td_error.max().item()
             except Exception as e:
-                logging.debug(f"[LEARNER] Q-stat computation skipped: {e}")
+                logging.debug(f"[LEARNER] Diagnostic computation skipped: {e}")
+
+            # ── F6: GPU memory diagnostics ──
+            try:
+                if torch.cuda.is_available():
+                    training_infos["gpu_mem_current_mb"] = (
+                        torch.cuda.memory_allocated() / (1024 * 1024)
+                    )
+                    training_infos["gpu_mem_peak_mb"] = (
+                        torch.cuda.max_memory_allocated() / (1024 * 1024)
+                    )
+            except Exception as e:
+                logging.debug(f"[LEARNER] GPU mem capture skipped: {e}")
+
+        # Calculate optimization step latency BEFORE logging so it can be included.
+        time_for_one_optimization_step = time.time() - time_for_one_optimization_step
+        frequency_for_one_optimization_step = 1 / (time_for_one_optimization_step + 1e-9)
 
         # Log training metrics at specified intervals
         if optimization_step % log_freq == 0:
@@ -631,6 +699,9 @@ def add_actor_information_and_train(
             if offline_replay_buffer is not None:
                 training_infos["offline_replay_buffer_size"] = len(offline_replay_buffer)
             training_infos["Optimization step"] = optimization_step
+            training_infos["Optimization frequency loop [Hz]"] = frequency_for_one_optimization_step
+            # F6: per-step latency in milliseconds (for paper's training-speed analysis)
+            training_infos["step_time_ms"] = time_for_one_optimization_step * 1000.0
 
             # Log training metrics
             if wandb_logger:
@@ -640,21 +711,10 @@ def add_actor_information_and_train(
             if csv_logger:
                 csv_logger.log_training(training_infos, optimization_step)
 
-        # Calculate and log optimization frequency
-        time_for_one_optimization_step = time.time() - time_for_one_optimization_step
-        frequency_for_one_optimization_step = 1 / (time_for_one_optimization_step + 1e-9)
-
-        logging.info(f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step}")
-
-        # Log optimization frequency
-        if wandb_logger:
-            wandb_logger.log_dict(
-                {
-                    "Optimization frequency loop [Hz]": frequency_for_one_optimization_step,
-                    "Optimization step": optimization_step,
-                },
-                mode="train",
-                custom_step_key="Optimization step",
+        if optimization_step % log_freq == 0:
+            logging.info(
+                f"[LEARNER] Optimization frequency loop [Hz]: {frequency_for_one_optimization_step:.2f} "
+                f"| step_time {time_for_one_optimization_step * 1000:.1f}ms"
             )
 
         optimization_step += 1

@@ -50,7 +50,23 @@ class TrainingCSVLogger:
         "q_std",
         "q_min",
         "q_max",
-        "entropy_term",  # = temperature * |log_prob|
+        "entropy_term",  # = temperature * |log_prob|  (component of actor loss)
+        # F6 (new): Critic diagnostics
+        "q_target_mean",         # mean of target critic Q values used in TD backup
+        "q_target_std",          # std of target critic Q values
+        "td_error_mean",         # mean |Q - target_Q| (TD error magnitude)
+        "td_error_std",          # std of TD error across batch
+        "td_error_max",          # max TD error (outlier diagnostic)
+        "critic_disagreement",   # std across critic ensemble (REDQ diagnostic)
+        # F6 (new): Actor diagnostics
+        "policy_entropy_raw",    # -mean(log π)  (raw entropy, not scaled by α)
+        "policy_log_prob_mean",  # mean(log π)
+        "actor_loss_q_term",     # -E[Q]  (the "exploitation" component)
+        "actor_loss_entropy_term",  # E[α·log π]  (the "exploration" component)
+        # F6 (new): Training performance
+        "step_time_ms",          # wall-clock time for one full optimization step
+        "gpu_mem_current_mb",    # current GPU memory allocated
+        "gpu_mem_peak_mb",       # peak GPU memory since last reset
     ]
 
     EPISODE_FIELDS = [
@@ -68,6 +84,10 @@ class TrainingCSVLogger:
         # F1-proxy: rolling success rate over last 20 NO-INTERVENTION episodes
         # Approximates frozen-policy eval without separate process protocol changes.
         "rolling_policy_only_success_20",
+        # F6 (new): per-episode metadata for academic analysis
+        "episode_length",                # number of env steps in this episode
+        "episode_intervention_steps",    # absolute count of intervention steps
+        "termination_reason",            # "success" / "timeout" / "other"
     ]
 
     EVAL_FIELDS = [
@@ -227,6 +247,22 @@ class TrainingCSVLogger:
             "q_min": self._fmt(training_infos.get("q_min")),
             "q_max": self._fmt(training_infos.get("q_max")),
             "entropy_term": self._fmt(training_infos.get("entropy_term")),
+            # F6: Critic diagnostics
+            "q_target_mean": self._fmt(training_infos.get("q_target_mean")),
+            "q_target_std": self._fmt(training_infos.get("q_target_std")),
+            "td_error_mean": self._fmt(training_infos.get("td_error_mean")),
+            "td_error_std": self._fmt(training_infos.get("td_error_std")),
+            "td_error_max": self._fmt(training_infos.get("td_error_max")),
+            "critic_disagreement": self._fmt(training_infos.get("critic_disagreement")),
+            # F6: Actor diagnostics
+            "policy_entropy_raw": self._fmt(training_infos.get("policy_entropy_raw")),
+            "policy_log_prob_mean": self._fmt(training_infos.get("policy_log_prob_mean")),
+            "actor_loss_q_term": self._fmt(training_infos.get("actor_loss_q_term")),
+            "actor_loss_entropy_term": self._fmt(training_infos.get("actor_loss_entropy_term")),
+            # F6: Training performance
+            "step_time_ms": self._fmt(training_infos.get("step_time_ms")),
+            "gpu_mem_current_mb": self._fmt(training_infos.get("gpu_mem_current_mb")),
+            "gpu_mem_peak_mb": self._fmt(training_infos.get("gpu_mem_peak_mb")),
         }
 
         # Track best loss
@@ -276,6 +312,10 @@ class TrainingCSVLogger:
             "rolling_success_rate_50": self._fmt(rolling_success),
             "rolling_intervention_rate_50": self._fmt(rolling_intervention),
             "rolling_policy_only_success_20": self._fmt(rolling_policy_only_success),
+            # F6: episode metadata
+            "episode_length": interaction_message.get("Episode length", ""),
+            "episode_intervention_steps": interaction_message.get("Episode intervention steps", ""),
+            "termination_reason": interaction_message.get("Termination reason", ""),
         }
 
         # Track best reward
