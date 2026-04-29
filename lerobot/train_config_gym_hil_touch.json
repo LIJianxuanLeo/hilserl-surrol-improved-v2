@@ -93,6 +93,8 @@
       "freeze_vision_encoder": false,
       "image_encoder_hidden_dim": 64,
       "shared_encoder": false,
+      "image_augmentation": true,
+      "image_augmentation_pad": 6,
       "num_discrete_actions": 3,
       "online_steps": 1000000,
       "online_buffer_capacity": 500000,

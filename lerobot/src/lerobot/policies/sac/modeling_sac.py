@@ -494,6 +494,54 @@ class SACPolicy(
         self.temperature = self.log_alpha.exp().item()
 
 
+class RandomShiftAug(nn.Module):
+    """DRQ-v2 style random shift augmentation (Yarats et al., 2021).
+
+    Pads each image with `pad` pixels of replicate padding, then randomly crops
+    back to the original size. The shift is INDEPENDENT per sample in the batch.
+
+    Applied during TRAINING ONLY (gated by `self.training`). At inference, this
+    module is a no-op identity, so policies remain deterministic.
+
+    Args:
+        pad: Maximum shift in pixels per side. DrQ-v2 uses 4 for 84x84 images;
+             4-8 is reasonable for our 128x128 inputs.
+    """
+
+    def __init__(self, pad: int = 4):
+        super().__init__()
+        self.pad = pad
+
+    def forward(self, x: Tensor) -> Tensor:
+        # No-op during eval / inference — preserves determinism for select_action()
+        if not self.training or self.pad <= 0:
+            return x
+
+        n, c, h, w = x.size()
+        # Replicate-pad the image: shape becomes [n, c, h+2*pad, w+2*pad]
+        padded = F.pad(x, (self.pad, self.pad, self.pad, self.pad), mode="replicate")
+
+        # Build a base sampling grid in normalized [-1, 1] coords for grid_sample
+        eps = 1.0 / (h + 2 * self.pad)
+        arange = torch.linspace(
+            -1.0 + eps, 1.0 - eps, h + 2 * self.pad, device=x.device, dtype=x.dtype
+        )[:h]  # take first h positions (anchored to top-left of unshifted crop)
+        base_grid_y, base_grid_x = torch.meshgrid(arange, arange, indexing="ij")
+        base_grid = torch.stack([base_grid_x, base_grid_y], dim=-1)  # (h, w, 2)
+        base_grid = base_grid.unsqueeze(0).expand(n, -1, -1, -1)     # (n, h, w, 2)
+
+        # Random shift per sample: integer pixels in [0, 2*pad+1) → normalized
+        shift = torch.randint(
+            0, 2 * self.pad + 1, size=(n, 1, 1, 2), device=x.device, dtype=x.dtype,
+        )
+        shift *= 2.0 / (h + 2 * self.pad)
+        # Center the shift around 0
+        shift -= 2.0 * self.pad / (h + 2 * self.pad)
+
+        grid = base_grid + shift
+        return F.grid_sample(padded, grid, padding_mode="zeros", align_corners=False)
+
+
 class SACObservationEncoder(nn.Module):
     """Encode image and/or state vector observations."""
 
@@ -504,6 +552,9 @@ class SACObservationEncoder(nn.Module):
         self._init_state_layers()
         self._init_normalization_buffers(config)
         self._compute_output_dim()
+        # DRQ-v2 augmentation (gated by config.image_augmentation)
+        self.image_aug = RandomShiftAug(pad=getattr(config, "image_augmentation_pad", 4))
+        self._aug_enabled = bool(getattr(config, "image_augmentation", False))
 
     def _init_image_layers(self) -> None:
         self.image_keys = [k for k in self.config.input_features if is_image_feature(k)]
@@ -668,6 +719,9 @@ class SACObservationEncoder(nn.Module):
             Dictionary mapping image keys to their corresponding encoded features
         """
         batched = torch.cat([self._normalize_image(obs[k]) for k in self.image_keys], dim=0)
+        # DRQ-v2 random shift augmentation — only fires during training; no-op at inference.
+        if self._aug_enabled:
+            batched = self.image_aug(batched)
         out = self.image_encoder(batched)
         chunks = torch.chunk(out, len(self.image_keys), dim=0)
         return dict(zip(self.image_keys, chunks, strict=False))

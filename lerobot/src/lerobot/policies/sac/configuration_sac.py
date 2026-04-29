@@ -135,6 +135,12 @@ class SACConfig(PreTrainedConfig):
     num_discrete_actions: int | None = None
     # Dimension of the image embedding pooling
     image_embedding_pooling_dim: int = 8
+    # DRQ-v2 style image augmentation (random shift) — applied during training only
+    # Set image_augmentation=True and pad_pixels controls the maximum shift magnitude.
+    # Following DrQ-v2 (Yarats et al., 2021), pad=4 works well for 84x84 images;
+    # for our 128x128 images pad=4-8 is reasonable.
+    image_augmentation: bool = False
+    image_augmentation_pad: int = 4
 
     # Training parameter
     # Number of steps for online training
