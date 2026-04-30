@@ -103,25 +103,25 @@
       "policy_update_freq": 1,
       "discount": 0.99,
       "temperature_init": 1.0,
-      "num_critics": 10,
+      "num_critics": 6,
       "num_subsample_critics": 2,
       "critic_lr": 0.0003,
       "actor_lr": 0.0001,
       "temperature_lr": 0.001,
       "critic_target_update_weight": 0.005,
       "utd_ratio": 8,
-      "state_encoder_hidden_dim": 512,
-      "latent_dim": 128,
+      "state_encoder_hidden_dim": 256,
+      "latent_dim": 64,
       "target_entropy": null,
       "use_backup_entropy": true,
       "grad_clip_norm": 10.0,
       "critic_network_kwargs": {
-        "hidden_dims": [512, 512],
+        "hidden_dims": [256, 256],
         "activate_final": true,
         "final_activation": null
       },
       "actor_network_kwargs": {
-        "hidden_dims": [512, 512],
+        "hidden_dims": [256, 256],
         "activate_final": true
       },
       "policy_kwargs": {
