@@ -1,143 +1,251 @@
 {
-    "output_dir": "outputs/train/paper_run_v2",
-    "job_name": "franka_sim_sac_touch",
-    "resume": false,
-    "seed": 1000,
-    "num_workers": 8,
-    "batch_size": 256,
-    "steps": 1000000,
-    "eval_freq": 10000,
-    "log_freq": 10,
-    "save_checkpoint": true,
-    "save_freq": 50000,
-    "use_policy_training_preset": true,
-    "wandb": {
-      "enable": false,
-      "project": "franka_sim_touch"
+  "output_dir": "outputs/train/paper_run_v2",
+  "job_name": "franka_sim_sac_touch",
+  "resume": false,
+  "seed": 1000,
+  "num_workers": 8,
+  "batch_size": 256,
+  "steps": 1000000,
+  "eval_freq": 10000,
+  "log_freq": 10,
+  "save_checkpoint": true,
+  "save_freq": 50000,
+  "use_policy_training_preset": true,
+  "wandb": {
+    "enable": false,
+    "project": "franka_sim_touch"
+  },
+  "dataset": {
+    "repo_id": "local/franka_sim_touch_demos",
+    "use_imagenet_stats": false
+  },
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeBase-v0",
+    "fps": 10,
+    "robot": null,
+    "teleop": {
+      "type": "touch",
+      "use_gripper": true,
+      "device_name": "right",
+      "position_scale": 0.2,
+      "haptic_module_path": "__HAPTIC_MODULE_PATH__",
+      "clutch_mode": false
     },
-    "dataset": {
-      "repo_id": "local/franka_sim_touch_demos",
-      "use_imagenet_stats": false
-    },
-    "env": {
-      "type": "gym_manipulator",
-      "name": "gym_hil",
-      "task": "PandaPickCubeBase-v0",
-      "fps": 10,
-      "robot": null,
-      "teleop": {
-        "type": "touch",
+    "processor": {
+      "gripper": {
         "use_gripper": true,
-        "device_name": "right",
-        "position_scale": 0.2,
-        "haptic_module_path": "__HAPTIC_MODULE_PATH__",
-        "clutch_mode": false
+        "gripper_penalty": -0.02
       },
-      "processor": {
-        "gripper": {
-          "use_gripper": true,
-          "gripper_penalty": -0.02
-        },
-        "reset": {
-          "fixed_reset_joint_positions": [0.0, 0.195, 0.0, -2.43, 0.0, 2.62, 0.785],
-          "reset_time_s": 2.0,
-          "control_time_s": 10.0,
-          "terminate_on_success": true
-        }
-      },
-      "features": {
-        "observation.images.front": { "type": "VISUAL", "shape": [3, 128, 128] },
-        "observation.images.wrist": { "type": "VISUAL", "shape": [3, 128, 128] },
-        "observation.state": { "type": "STATE", "shape": [18] },
-        "action": { "type": "ACTION", "shape": [7] }
-      },
-      "features_map": {
-        "observation.images.front": "observation.images.front",
-        "observation.images.wrist": "observation.images.wrist",
-        "observation.state": "observation.state",
-        "action": "action"
+      "reset": {
+        "fixed_reset_joint_positions": [
+          0.0,
+          0.195,
+          0.0,
+          -2.43,
+          0.0,
+          2.62,
+          0.785
+        ],
+        "reset_time_s": 2.0,
+        "control_time_s": 10.0,
+        "terminate_on_success": true
       }
     },
-    "policy": {
-      "type": "sac",
-      "push_to_hub": false,
-      "n_obs_steps": 1,
-      "normalization_mapping": {
-        "VISUAL": "MEAN_STD",
-        "STATE": "MIN_MAX",
-        "ENV": "MIN_MAX",
-        "ACTION": "MIN_MAX"
+    "features": {
+      "observation.images.front": {
+        "type": "VISUAL",
+        "shape": [
+          3,
+          128,
+          128
+        ]
       },
-      "dataset_stats": {
-        "observation.images.front": {
-          "mean": [0.485, 0.456, 0.406],
-          "std":  [0.229, 0.224, 0.225]
-        },
-        "observation.images.wrist": {
-          "mean": [0.485, 0.456, 0.406],
-          "std":  [0.229, 0.224, 0.225]
-        },
-        "observation.state": {
-          "min": [-0.063, 0.055, -0.204, -2.671, -0.298, 1.667, 0.638, -0.217, -0.540, -0.496, -0.831, -0.663, -1.607, -0.330, 0.0, 0.464, -0.034, 0.003],
-          "max": [0.218, 0.612, 0.057, -1.511, 0.074, 3.128, 1.159, 0.459, 0.574, 0.225, 1.416, 0.249, 0.793, 0.784, 255.0, 0.600, 0.029, 0.155]
-        },
-        "action": {
-          "min": [-1.0, -0.6, -1.0, -0.25, -0.5, -0.25, 0.0],
-          "max": [1.0, 0.6, 1.0, 0.25, 0.5, 0.25, 2.0]
-        }
+      "observation.images.wrist": {
+        "type": "VISUAL",
+        "shape": [
+          3,
+          128,
+          128
+        ]
       },
-      "device": "cuda",
-      "storage_device": "cpu",
-      "async_prefetch": true,
-      "vision_encoder_name": "helper2424/resnet10",
-      "freeze_vision_encoder": false,
-      "image_encoder_hidden_dim": 64,
-      "shared_encoder": false,
-      "image_augmentation": true,
-      "image_augmentation_pad": 6,
-      "num_discrete_actions": 3,
-      "online_steps": 1000000,
-      "online_buffer_capacity": 500000,
-      "offline_buffer_capacity": 200000,
-      "online_step_before_learning": 50,
-      "policy_update_freq": 1,
-      "discount": 0.99,
-      "temperature_init": 1.0,
-      "num_critics": 6,
-      "num_subsample_critics": 2,
-      "critic_lr": 0.0003,
-      "actor_lr": 0.0001,
-      "temperature_lr": 0.001,
-      "critic_target_update_weight": 0.005,
-      "utd_ratio": 8,
-      "state_encoder_hidden_dim": 256,
-      "latent_dim": 64,
-      "target_entropy": null,
-      "use_backup_entropy": true,
-      "grad_clip_norm": 10.0,
-      "critic_network_kwargs": {
-        "hidden_dims": [256, 256],
-        "activate_final": true,
-        "final_activation": null
+      "observation.state": {
+        "type": "STATE",
+        "shape": [
+          18
+        ]
       },
-      "actor_network_kwargs": {
-        "hidden_dims": [256, 256],
-        "activate_final": true
-      },
-      "policy_kwargs": {
-        "use_tanh_squash": true,
-        "std_min": 1e-5,
-        "std_max": 10.0,
-        "init_final": 0.05
-      },
-      "actor_learner_config": {
-        "learner_host": "127.0.0.1",
-        "learner_port": 50051,
-        "policy_parameters_push_frequency": 4
-      },
-      "concurrency": {
-        "actor": "threads",
-        "learner": "threads"
+      "action": {
+        "type": "ACTION",
+        "shape": [
+          7
+        ]
       }
+    },
+    "features_map": {
+      "observation.images.front": "observation.images.front",
+      "observation.images.wrist": "observation.images.wrist",
+      "observation.state": "observation.state",
+      "action": "action"
+    }
+  },
+  "policy": {
+    "type": "sac",
+    "push_to_hub": false,
+    "n_obs_steps": 1,
+    "normalization_mapping": {
+      "VISUAL": "MEAN_STD",
+      "STATE": "MIN_MAX",
+      "ENV": "MIN_MAX",
+      "ACTION": "MIN_MAX"
+    },
+    "dataset_stats": {
+      "observation.images.front": {
+        "mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "std": [
+          0.229,
+          0.224,
+          0.225
+        ]
+      },
+      "observation.images.wrist": {
+        "mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "std": [
+          0.229,
+          0.224,
+          0.225
+        ]
+      },
+      "observation.state": {
+        "min": [
+          -0.063,
+          0.055,
+          -0.204,
+          -2.671,
+          -0.298,
+          1.667,
+          0.638,
+          -0.217,
+          -0.54,
+          -0.496,
+          -0.831,
+          -0.663,
+          -1.607,
+          -0.33,
+          0.0,
+          0.464,
+          -0.034,
+          0.003
+        ],
+        "max": [
+          0.218,
+          0.612,
+          0.057,
+          -1.511,
+          0.074,
+          3.128,
+          1.159,
+          0.459,
+          0.574,
+          0.225,
+          1.416,
+          0.249,
+          0.793,
+          0.784,
+          255.0,
+          0.6,
+          0.029,
+          0.155
+        ]
+      },
+      "action": {
+        "min": [
+          -1.0,
+          -0.6,
+          -1.0,
+          -0.25,
+          -0.5,
+          -0.25,
+          0.0
+        ],
+        "max": [
+          1.0,
+          0.6,
+          1.0,
+          0.25,
+          0.5,
+          0.25,
+          2.0
+        ]
+      }
+    },
+    "device": "cuda",
+    "storage_device": "cpu",
+    "async_prefetch": true,
+    "vision_encoder_name": "helper2424/resnet10",
+    "freeze_vision_encoder": false,
+    "image_encoder_hidden_dim": 64,
+    "shared_encoder": false,
+    "image_augmentation": true,
+    "image_augmentation_pad": 6,
+    "num_discrete_actions": 3,
+    "online_steps": 1000000,
+    "online_buffer_capacity": 500000,
+    "offline_buffer_capacity": 200000,
+    "online_step_before_learning": 100,
+    "policy_update_freq": 1,
+    "discount": 0.99,
+    "temperature_init": 1.0,
+    "num_critics": 10,
+    "num_subsample_critics": 2,
+    "critic_lr": 0.0003,
+    "actor_lr": 0.0001,
+    "temperature_lr": 0.001,
+    "critic_target_update_weight": 0.005,
+    "utd_ratio": 8,
+    "state_encoder_hidden_dim": 512,
+    "latent_dim": 128,
+    "target_entropy": null,
+    "use_backup_entropy": true,
+    "grad_clip_norm": 10.0,
+    "critic_network_kwargs": {
+      "hidden_dims": [
+        512,
+        512
+      ],
+      "activate_final": true,
+      "final_activation": null
+    },
+    "actor_network_kwargs": {
+      "hidden_dims": [
+        512,
+        512
+      ],
+      "activate_final": true
+    },
+    "policy_kwargs": {
+      "use_tanh_squash": true,
+      "std_min": 1e-05,
+      "std_max": 10.0,
+      "init_final": 0.05
+    },
+    "actor_learner_config": {
+      "learner_host": "127.0.0.1",
+      "learner_port": 50051,
+      "policy_parameters_push_frequency": 4
+    },
+    "concurrency": {
+      "actor": "threads",
+      "learner": "threads"
     }
   }
+}
