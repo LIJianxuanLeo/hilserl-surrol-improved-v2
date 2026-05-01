@@ -1133,6 +1133,18 @@ def initialize_offline_replay_buffer(
     Returns:
         ReplayBuffer: Initialized offline replay buffer
     """
+    # PATCH: For local repo_ids (e.g. "local/franka_sim_touch_demos"), bypass
+    # lerobot.datasets entirely — it requires HuggingFace Hub connectivity even
+    # for local-only datasets. Use our self-contained loader instead.
+    from lerobot.rl.local_dataset import is_local_repo_id, make_local_offline_buffer
+
+    if not cfg.resume and is_local_repo_id(cfg.dataset.repo_id):
+        logging.info(
+            f"[OFFLINE BUFFER] Local repo detected ({cfg.dataset.repo_id}); "
+            f"using LocalLeRobotDataset (bypass HuggingFace Hub)"
+        )
+        return make_local_offline_buffer(cfg, device=device, storage_device=storage_device)
+
     if not cfg.resume:
         logging.info("make_dataset offline buffer")
         offline_dataset = make_dataset(cfg)
