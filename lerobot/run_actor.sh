@@ -26,6 +26,9 @@ esac
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+# Actor itself doesn't log to wandb (the learner does), but keep WANDB_MODE
+# inheritable in case any subprocess uses it.
+export WANDB_MODE="${WANDB_MODE:-online}"
 
 if [ -z "${PYTHON:-}" ]; then
   for cand in \

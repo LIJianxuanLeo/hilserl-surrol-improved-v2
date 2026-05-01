@@ -12,8 +12,13 @@
   "save_freq": 50000,
   "use_policy_training_preset": true,
   "wandb": {
-    "enable": false,
-    "project": "franka_sim_touch"
+    "enable": true,
+    "disable_artifact": true,
+    "project": "hilserl-surrol-v2",
+    "entity": null,
+    "notes": "HIL-SERL V2 touch run \u2014 REDQ-10 + DRQ + F6 logging",
+    "run_id": null,
+    "mode": null
   },
   "dataset": {
     "repo_id": "local/franka_sim_touch_demos",

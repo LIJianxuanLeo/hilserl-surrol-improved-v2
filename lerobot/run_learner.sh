@@ -32,6 +32,19 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 
+# wandb defaults — honors caller's WANDB_* if set
+#   WANDB_API_KEY      your wandb API key (required for online mode)
+#   WANDB_MODE         online | offline | disabled (default online)
+#   WANDB_ENTITY       wandb team/account name (overrides config)
+#   WANDB_RUN_GROUP    arbitrary grouping label
+# To disable wandb for a single run: WANDB_MODE=disabled ./run_learner.sh
+# To run offline (sync later): WANDB_MODE=offline ./run_learner.sh
+export WANDB_MODE="${WANDB_MODE:-online}"
+if [ -z "${WANDB_API_KEY:-}" ] && [ "$WANDB_MODE" = "online" ]; then
+  echo "  warning: WANDB_API_KEY not set; wandb will prompt or fail."
+  echo "  → run 'wandb login' once, or set WANDB_MODE=offline to skip."
+fi
+
 # Auto-detect python (prefer hilserl env, fall back to system)
 if [ -z "${PYTHON:-}" ]; then
   for cand in \
@@ -48,6 +61,7 @@ echo "  config:        $CONFIG"
 echo "  python:        $PYTHON"
 echo "  MUJOCO_GL:     $MUJOCO_GL"
 echo "  HF_HUB_OFFLINE: $HF_HUB_OFFLINE"
+echo "  WANDB_MODE:    $WANDB_MODE"
 echo "==================="
 
 exec "$PYTHON" -m lerobot.rl.learner --config_path "$CONFIG"
